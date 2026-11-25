@@ -27,11 +27,12 @@ private final class Harness {
   var events: [ServeEvent] = []
   var runner: QueueRunner!
 
-  init(patterns: [String] = ["set lamp to [a-z ]+"]) throws {
+  init(patterns: [String] = ["set lamp to [a-z ]+"], matchTimeout: Double = 2) throws {
     root = try temporaryDirectory().appending(path: "queue", directoryHint: .isDirectory)
     surface.answerScript = [T.window(responses: [T.response(T.text("Done"))])]
     let asker = Asker(
-      phraseGuard: try PhraseGuard(GuardSettings(patterns: patterns)), surface: surface, time: time)
+      phraseGuard: try PhraseGuard(GuardSettings(patterns: patterns), matchTimeout: matchTimeout),
+      surface: surface, time: time)
     runner = QueueRunner(
       root: root, asker: asker, settle: 0.4, log: { [unowned self] in events.append($0) })
   }
@@ -208,7 +209,7 @@ private final class Harness {
 
   @Test func timeoutWithinBoundsIsUsed() throws {
     let h = try Harness()
-    h.surface.answerScript = [nil]
+    h.surface.answerScript = [FakeTrees.window(responses: [])]
     try h.runner.prepare()
     try h.submit("t", #"{"phrase":"set lamp to red","timeout_seconds":3}"#)
     _ = try h.runner.processNext()
@@ -341,5 +342,28 @@ private final class Harness {
   @Test func listingFailureStopsTheRunner() throws {
     let h = try Harness()
     #expect(throws: QueueFailure.self) { _ = try h.runner.processNext() }
+  }
+
+  @Test func reusedIdGetsARejectedFileAndKeepsTheOldResult() throws {
+    let h = try Harness()
+    try h.runner.prepare()
+    try h.submit("a", #"{"phrase":"set lamp to red"}"#)
+    try h.drain()
+    try h.submit("a", #"{"phrase":"set lamp to blue"}"#)
+    try h.drain()
+    #expect(try h.result("a")?.phrase == "set lamp to red")
+    let data = try Data(contentsOf: h.root.appending(path: "results/a.rejected.json"))
+    let rejected = try JSON.decoder().decode(AskResult.self, from: data)
+    #expect(rejected.error?.code == .invalidRequest)
+    #expect(rejected.phrase == "set lamp to blue")
+    #expect(h.surface.calls.filter { $0 == "confirmPrompt" }.count == 1)
+  }
+
+  @Test func guardTimeoutStopsTheRunner() throws {
+    let h = try Harness(patterns: ["(a+)+$"], matchTimeout: 0.3)
+    try h.runner.prepare()
+    try h.submit("p", #"{"phrase":"\#(String(repeating: "a", count: 36))!"}"#)
+    #expect(throws: QueueFailure.self) { _ = try h.runner.processNext() }
+    #expect(try h.result("p")?.error?.code == .guardTimeout)
   }
 }

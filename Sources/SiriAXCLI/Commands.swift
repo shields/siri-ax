@@ -92,6 +92,9 @@ struct Ask: ParsableCommand, Executable {
     guard settleRange.contains(settle) else {
       throw ValidationError("--settle must be 0.4 to 30")
     }
+    guard settle < timeout else {
+      throw ValidationError("--settle must be less than --timeout")
+    }
   }
 
   func execute(_ environment: Environment) -> Int32 {
@@ -133,6 +136,11 @@ struct Serve: ParsableCommand, Executable {
       phraseGuard = try guardOptions.build(environment)
     } catch {
       return CLI.fail(.configInvalid, "\(error)", command: "serve", environment)
+    }
+    guard phraseGuard.patternCount > 0 else {
+      return CLI.fail(
+        .configInvalid, "no allow patterns are configured; serve would refuse every request",
+        command: "serve", environment)
     }
     let surface = environment.surface()
     do {

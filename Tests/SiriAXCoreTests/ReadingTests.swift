@@ -123,3 +123,21 @@ private typealias T = FakeTrees
     #expect(!r9)
   }
 }
+
+@Suite struct InterimTests {
+  @Test func searchingTextIsNeverSettled() {
+    var settler = AnswerSettler(quiet: 1)
+    let parts = [AnswerPart(kind: .text, text: "Searching for red")]
+    let first = settler.observe(parts, at: 0)
+    let later = settler.observe(parts, at: 30)
+    #expect(!first && !later)
+  }
+
+  @Test func otherTextSettles() {
+    var settler = AnswerSettler(quiet: 1)
+    let parts = [AnswerPart(kind: .text, text: "Your Lamp can't do that.")]
+    let first = settler.observe(parts, at: 0)
+    let later = settler.observe(parts, at: 1)
+    #expect(!first && later)
+  }
+}

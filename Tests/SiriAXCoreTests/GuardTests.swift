@@ -187,4 +187,15 @@ private let lamp = #"set (the )?lamp to (red|blue|(cool |warm )?white|[0-9]{1,3}
     #expect(code(guardian.check("set lamp to red and call mom")) == .notAllowed)
     #expect(code(guardian.check("set front door to unlocked")) == .notAllowed)
   }
+
+  @Test func backtrackingPatternTimesOutInsteadOfHanging() throws {
+    let guardian = try PhraseGuard(
+      GuardSettings(patterns: ["(a+)+$"]), matchTimeout: 0.3)
+    let decision = guardian.check(String(repeating: "a", count: 36) + "!")
+    guard case .timedOut(let info) = decision else {
+      Issue.record("expected a timeout, got \(decision)")
+      return
+    }
+    #expect(info.code == .guardTimeout)
+  }
 }

@@ -55,7 +55,10 @@ public final class FakeSurface: SiriSurface {
 
   public func snapshot() throws -> UINode? {
     try step("snapshot")
-    if !confirmed { return windowWithPromptField ? FakeTrees.window(responses: []) : nil }
+    if !confirmed {
+      return windowWithPromptField
+        ? FakeTrees.window(responses: [], promptValue: promptFieldValue) : nil
+    }
     let node =
       answerScript.isEmpty
       ? FakeTrees.window(responses: []) : answerScript[min(answerIndex, answerScript.count - 1)]
@@ -64,6 +67,7 @@ public final class FakeSurface: SiriSurface {
   }
 
   public var windowWithPromptField = true
+  public var promptFieldValue: String?
 
   public func pressNewConversation() throws {
     try step("pressNewConversation")
@@ -103,7 +107,9 @@ public enum FakeTrees {
   }
 
   /// A tree shaped like the observed Siri AI window.
-  public static func window(responses: [UINode], prompt: String? = nil) -> UINode {
+  public static func window(responses: [UINode], prompt: String? = nil, promptValue: String? = nil)
+    -> UINode
+  {
     var transcript: [UINode] = []
     if let prompt {
       transcript.append(
@@ -125,7 +131,7 @@ public enum FakeTrees {
           children: [
             UINode(
               role: "AXScrollArea", identifier: "transcriptScrollView", children: transcript),
-            UINode(role: "AXTextField", identifier: "promptViewTextField"),
+            UINode(role: "AXTextField", identifier: "promptViewTextField", value: promptValue),
           ]),
       ])
   }

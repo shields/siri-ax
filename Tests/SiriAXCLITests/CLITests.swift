@@ -132,7 +132,7 @@ private let allowRed = ["--allow", "set lamp to (red|blue)"]
 
   @Test func timeoutAndSettleOptionsAreUsed() throws {
     let c = Capture()
-    c.surface.answerScript = [nil]
+    c.surface.answerScript = [FakeTrees.window(responses: [])]
     #expect(c.run("ask", "--allow", ".+", "--timeout", "2", "--settle", "0.5", "x") == 1)
     let json = try c.only()
     #expect(json["status"] as? String == "no_answer")
@@ -273,15 +273,17 @@ private let allowRed = ["--allow", "set lamp to (red|blue)"]
     #expect((json["error"] as? [String: String])?["code"] == "queue_failure")
   }
 
-  @Test func serveWithNoPatternsStartsAndRefuses() throws {
+  @Test func serveWithNoPatternsFailsToStart() throws {
     let c = Capture()
-    let dir = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: dir) }
-    let requests = dir.appending(path: "q/requests")
-    try FileManager.default.createDirectory(at: requests, withIntermediateDirectories: true)
-    try Data(#"{"phrase":"set lamp to red"}"#.utf8).write(
-      to: requests.appending(path: "one.json"))
-    #expect(c.run("serve", dir.appending(path: "q").path) == 0)
-    #expect(try c.lines()[2]["status"] as? String == "refused")
+    #expect(c.run("serve", "/nonexistent-queue") == 3)
+    let json = try c.only()
+    #expect((json["error"] as? [String: String])?["code"] == "config_invalid")
+    #expect(json["command"] as? String == "serve")
+  }
+
+  @Test func askRejectsSettleNotBelowTimeout() throws {
+    let c = Capture()
+    #expect(c.run("ask", "--allow", ".+", "--timeout", "1", "x") == 64)
+    #expect(try c.only()["status"] as? String == "error")
   }
 }

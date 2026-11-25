@@ -58,13 +58,16 @@ public struct AnswerSettler {
 
   public init(quiet: Double) { self.quiet = quiet }
 
-  /// Records a read at `time` (monotonic seconds) and returns whether the answer is settled.
   public mutating func observe(_ parts: [AnswerPart], at time: Double) -> Bool {
     if parts != last {
       last = parts
       since = time
     }
-    return !parts.isEmpty && time - since >= quiet
+    return !parts.isEmpty && !Self.isInterim(parts) && time - since >= quiet
+  }
+
+  static func isInterim(_ parts: [AnswerPart]) -> Bool {
+    parts.count == 1 && parts[0].kind == .text && parts[0].text.hasPrefix("Searching for ")
   }
 
   public var current: [AnswerPart] { last }

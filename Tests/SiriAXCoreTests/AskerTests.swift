@@ -83,11 +83,19 @@ private func asker(_ surface: FakeSurface, _ time: FakeTime, patterns: [String] 
     #expect(result.elapsedMilliseconds >= 2000)
   }
 
-  @Test func windowVanishingMidAnswerCountsAsNoAnswer() throws {
+  @Test func windowVanishingMidAnswerIsAnError() throws {
     let surface = FakeSurface()
     surface.answerScript = [nil]
-    #expect(
-      try asker(surface, FakeTime()).ask("x", options: AskOptions(timeout: 1)).status == .noAnswer)
+    let result = try asker(surface, FakeTime()).ask("x", options: AskOptions(timeout: 1))
+    #expect(result.status == .error)
+    #expect(result.error?.code == .siriNoWindow)
+  }
+
+  @Test func staleTextInThePromptFieldIsNotAnEmptyConversation() throws {
+    let surface = FakeSurface()
+    surface.promptFieldValue = "left over"
+    let result = try asker(surface, FakeTime()).ask("x")
+    #expect(result.error?.code == .uiChanged)
   }
 
   @Test func refusedNeverTouchesSiri() throws {

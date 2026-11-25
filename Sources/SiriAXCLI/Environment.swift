@@ -21,9 +21,7 @@ public struct Environment {
   public var probe: any SystemProbe
   public var time: any Timekeeper
   public var readFile: (String) throws -> Data
-  /// Writes one line to stdout.
   public var out: (String) -> Void
-  /// Writes one line to stderr.
   public var err: (String) -> Void
   /// Starts watching for SIGINT and SIGTERM and returns a check for whether one has arrived.
   public var watchStopSignals: () -> () -> Bool

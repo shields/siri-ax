@@ -72,6 +72,7 @@ public final class QueueRunner {
   private let settle: Double
   private let log: (ServeEvent) -> Void
   private var reported: Set<String> = []
+  static let maxReported = 1000
 
   var requests: URL { root.appending(path: "requests", directoryHint: .isDirectory) }
   var claimed: URL { root.appending(path: "claimed", directoryHint: .isDirectory) }
@@ -101,7 +102,6 @@ public final class QueueRunner {
     }
   }
 
-  /// Answers requests that an earlier run claimed but did not finish.
   public func recover() throws {
     for name in try listing(claimed) {
       guard let id = QueueLayout.id(fromFileName: name) else {
@@ -119,7 +119,6 @@ public final class QueueRunner {
     }
   }
 
-  /// Handles requests until `shouldStop` is true, polling for new ones.
   public func run(shouldStop: () -> Bool) throws {
     try recover()
     while !shouldStop() {
@@ -128,7 +127,6 @@ public final class QueueRunner {
     }
   }
 
-  /// Handles the request that sorts first, if any. Returns whether there was one.
   public func processNext() throws -> Bool {
     for name in try listing(requests).sorted() {
       guard name.hasSuffix(".json") else { continue }
@@ -137,8 +135,22 @@ public final class QueueRunner {
         continue
       }
       if FileManager.default.fileExists(atPath: resultURL(id).path) {
-        discard(requests.appending(path: name))
-        report(name, "duplicate_id")
+        let claimedURL = claimed.appending(path: name)
+        guard
+          (try? FileManager.default.moveItem(at: requests.appending(path: name), to: claimedURL))
+            != nil
+        else {
+          report(name, "cannot_claim")
+          continue
+        }
+        defer { discard(claimedURL) }
+        let phrase = parse(claimedURL).request?.phrase
+        try write(
+          failure(
+            id: id, phrase: phrase, .invalidRequest,
+            "a result for this id already exists; use a fresh id"),
+          to: rejectedURL(id))
+        emit(.ignored, id: id, status: .error)
         continue
       }
       do {
@@ -175,11 +187,20 @@ public final class QueueRunner {
     }
     try write(result)
     emit(.result, id: id, status: result.status)
+    if result.error?.code == .guardTimeout {
+      throw QueueFailure(
+        "an allow pattern backtracks without end; fix the guard configuration and restart")
+    }
   }
 
   private enum Parsed {
     case success(QueueRequest)
     case failure(String)
+
+    var request: QueueRequest? {
+      if case .success(let request) = self { return request }
+      return nil
+    }
   }
 
   private func parse(_ url: URL) -> Parsed {
@@ -217,11 +238,15 @@ public final class QueueRunner {
     results.appending(path: "\(id).json", directoryHint: .notDirectory)
   }
 
-  private func write(_ result: AskResult) throws {
+  private func rejectedURL(_ id: String) -> URL {
+    results.appending(path: "\(id).rejected.json", directoryHint: .notDirectory)
+  }
+
+  private func write(_ result: AskResult, to destination: URL? = nil) throws {
     guard let id = result.id else { throw QueueFailure("result has no id") }
     let data = Data((JSON.line(result) + "\n").utf8)
     do {
-      try data.write(to: resultURL(id), options: .atomic)
+      try data.write(to: destination ?? resultURL(id), options: .atomic)
     } catch {
       throw QueueFailure("cannot write the result for \(id): \(error.localizedDescription)")
     }
@@ -241,7 +266,7 @@ public final class QueueRunner {
   }
 
   private func report(_ name: String, _ reason: String) {
-    if reported.insert("\(name) \(reason)").inserted {
+    if reported.count < Self.maxReported, reported.insert("\(name) \(reason)").inserted {
       log(
         ServeEvent(event: .ignored, time: asker.time.now(), id: nil, detail: "\(reason): \(name)"))
     }

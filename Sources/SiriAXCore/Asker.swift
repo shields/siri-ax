@@ -60,6 +60,7 @@ public struct Asker {
     let toSend: String
     switch phraseGuard.check(phrase) {
     case .refuse(let info): return finish(.refused, error: info)
+    case .timedOut(let info): return finish(.error, error: info)
     case .allow(let allowed): toSend = allowed
     }
 
@@ -84,7 +85,8 @@ public struct Asker {
     let deadline = time.uptime() + Self.newConversationTimeout
     while true {
       if let tree = try surface.snapshot(),
-        !tree.all(identifier: SiriIdentifiers.promptField).isEmpty,
+        let field = tree.all(identifier: SiriIdentifiers.promptField).first,
+        field.value?.isEmpty ?? true,
         tree.all(identifier: SiriIdentifiers.modelResponse).isEmpty
       {
         return
@@ -102,7 +104,10 @@ public struct Asker {
     let deadline = time.uptime() + options.timeout
     while true {
       time.sleep(Self.pollInterval)
-      let parts = try surface.snapshot().flatMap(AnswerReader.parts(in:)) ?? []
+      guard let tree = try surface.snapshot() else {
+        throw SiriFailure(.siriNoWindow, "the Siri AI window closed while waiting for the answer")
+      }
+      let parts = AnswerReader.parts(in: tree) ?? []
       if settler.observe(parts, at: time.uptime()) { return (parts, true) }
       if time.uptime() >= deadline { return (settler.current, false) }
     }

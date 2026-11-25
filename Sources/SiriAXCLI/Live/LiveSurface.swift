@@ -47,6 +47,9 @@ final class LiveSurface: SiriSurface {
       throw SiriFailure(.siriNoWindow, "could not launch Siri AI: \(error.localizedDescription)")
     }
     open.waitUntilExit()
+    guard open.terminationStatus == 0 else {
+      throw SiriFailure(.siriNoWindow, "open exited with status \(open.terminationStatus)")
+    }
     let deadline = Date().addingTimeInterval(timeout)
     while Date() < deadline {
       if window() != nil { return }
@@ -58,7 +61,11 @@ final class LiveSurface: SiriSurface {
   func snapshot() throws -> UINode? {
     guard let window = window() else { return nil }
     var budget = Self.maxNodes
-    return Self.node(window, depth: 0, budget: &budget)
+    let tree = Self.node(window, depth: 0, budget: &budget)
+    if budget <= 0 {
+      throw SiriFailure(.uiChanged, "the Siri AI window has more than \(Self.maxNodes) elements")
+    }
+    return tree
   }
 
   func pressNewConversation() throws {
@@ -95,7 +102,11 @@ final class LiveSurface: SiriSurface {
     let application = AXUIElementCreateApplication(running.processIdentifier)
     AXUIElementSetMessagingTimeout(application, 5)
     let windows = Self.attribute(application, kAXWindowsAttribute) as? [AXUIElement]
-    return windows?.first
+    let chosen =
+      windows?.first { Self.string($0, kAXSubroleAttribute) == kAXStandardWindowSubrole }
+      ?? windows?.first
+    if let chosen { AXUIElementSetMessagingTimeout(chosen, 2) }
+    return chosen
   }
 
   private func element(_ identifier: String) throws -> AXUIElement {

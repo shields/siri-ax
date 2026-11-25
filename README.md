@@ -77,17 +77,23 @@ siri-ax doctor
 `ask` starts a new conversation (so earlier turns cannot influence the answer),
 submits the phrase, waits for the answer to settle, and prints one result.
 `--timeout` is the number of seconds to wait for the answer, 1–120, default 20.
-The first request after Siri AI launches can take most of a minute, so use a
-longer timeout then. `--settle` is how long the answer must stay unchanged to
-count as settled, 0.4–30 seconds, default 1.2.
+It covers the answer wait only: up to about 15 seconds of waiting for the window
+and for the new conversation come before it. The first request after Siri AI
+launches can take most of a minute, so use a longer timeout then. `--settle` is
+how long the answer must stay unchanged to count as settled, 0.4–30 seconds,
+default 1.2, and must be less than `--timeout`.
 
 `serve` answers request files from a queue directory until it receives SIGINT or
 SIGTERM, and logs JSON Lines events to stdout. It checks Accessibility and that
-Siri AI is installed at startup and exits with an error if not.
+Siri AI is installed at startup and exits with an error if not. It also refuses
+to start with no allow patterns (`config_invalid`), since it could only refuse
+every request. If the queue becomes unwritable while it runs, it stops with a
+failure line and exit 3 after any events already logged.
 
 `doctor` reports whether Accessibility is granted, whether Siri AI is installed,
 running, and windowed, and the macOS version. A running app without a window is
-fine: `ask` and `serve` open one.
+fine: `ask` and `serve` open one. Without Accessibility permission `doctor`
+cannot count windows, so it reports `siri_has_window` false even if one exists.
 
 `--help` prints to stderr and leaves stdout empty. A usage error prints a JSON
 error with code `usage` and exits 64.
@@ -128,18 +134,22 @@ A phrase is checked in this order, and the first failure refuses it:
 6. it matches no pattern **in full**, case-insensitively (`not_allowed`).
 
 The trimmed phrase is what Siri receives. Refusal messages never repeat the
-phrase.
+phrase. The `phrase` field of a refused result is the raw input, so do not
+forward it anywhere that would be hurt by it.
 
 ### Guard file format
 
 One `key = value` per line. Blank lines and lines starting with `#` are ignored.
 A `#` after a value is part of the value, so a pattern can contain one.
 
-| Key          | Value                                                       |
-| ------------ | ----------------------------------------------------------- |
-| `allow`      | A regular expression (ICU syntax). Repeatable; at most 100. |
-| `max_length` | 1–200, default 100. Set at most once.                       |
-| `non_ascii`  | `allow` or `deny` (default). Set at most once.              |
+| Key          | Value                                                                                                                                 |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `allow`      | A regular expression (ICU syntax). Repeatable; at most 100, each at most 500 characters. `--allow` patterns count toward both limits. |
+| `max_length` | 1–200 Unicode scalars, default 100. Set at most once.                                                                                 |
+| `non_ascii`  | `allow` or `deny` (default). Set at most once.                                                                                        |
+
+Values are trimmed of surrounding whitespace, so write a significant trailing
+space as `\x20`. An empty value is `config_invalid`.
 
 Each pattern is compiled as `\A(?:pattern)\z`. A pattern that is not a
 well-formed expression on its own is rejected when the guard is built, so
@@ -167,6 +177,15 @@ attempt to change the guard or the runner through the queue.
 
 What it does not defend against:
 
+- **A pattern that backtracks without end.** A pattern such as `(a+)+$` can take
+  exponential time on a short phrase. The guard gives each match two seconds. On
+  a timeout `ask` returns status `error`, code `guard_timeout`, and `serve`
+  writes that result and stops, because ICU cannot cancel the match and the
+  spinning thread would otherwise keep the runner slow. Avoid nested unbounded
+  quantifiers.
+- **Look-alikes with `non_ascii = allow`.** Case-insensitive matching treats
+  U+212A (Kelvin sign) as `k` and U+017F (long s) as `s`, and Siri receives the
+  look-alike. Keep the default `deny` unless you need non-ASCII text.
 - **A pattern that is too broad.** `set lamp to .*` allows “set lamp to red and
   call Mom”. End patterns with a closed list of values, not free text.
 - **Siri’s interpretation of an allowed phrase.** The guard checks words, not
@@ -174,8 +193,11 @@ What it does not defend against:
 - **Anyone who can run `siri-ax` with their own guard file**, or who can write
   to the queue directory and read its results. The queue directory is created
   with mode 0700; give a sandboxed agent access to it deliberately.
-- **Flooding.** Requests run one at a time, each for at most its timeout; there
-  is no rate limit.
+- **Flooding.** Requests run one at a time, each for at most its timeout plus
+  the window waits; there is no rate limit or queue cap, every request leaves a
+  result file, and the runner never prunes them. Prune `results/` yourself.
+  Grant the agent write access to `requests/` and read access to `results/`
+  only, not to `claimed/` or the root.
 - **Untrusted answers.** `answer_text` is text that Siri produced and may
   include names, web content, or device labels. An agent should treat it as
   data, never as instructions.
@@ -206,8 +228,12 @@ file contents and never used as anything but a name inside `results/`. Files
 with other names that end in `.json` are ignored (the runner logs an `ignored`
 event once). Ids must not be reused; ids that differ only in case are the same
 id on a case-insensitive volume, which is the macOS default. A request whose
-result already exists is dropped with an `ignored` event and the existing result
-is left alone.
+result already exists is dropped, the existing result is left alone, and an
+error result with code `invalid_request` is written to
+`results/<id>.rejected.json` (its `phrase` is the new request’s). Always compare
+`phrase` in a result with what you sent, and use a fresh id each time. A file
+with an invalid name never gets a result, so treat a missing result as a
+timeout.
 
 **Writing atomically.** Write the file under a name that does not end in
 `.json`, then rename it into `requests/`, on the same volume. Only `<id>.json`
@@ -233,9 +259,9 @@ had its handling interrupted; it is answered with error code `interrupted` and
 is not retried, because it may already have reached Siri.
 
 **Stopping.** `serve` stops on SIGINT or SIGTERM only. A request in progress
-finishes first (at most its timeout); a second signal ends the process
-immediately. There is deliberately no queue command that stops or reconfigures
-it.
+finishes first (its timeout plus the window waits); a second signal ends the
+process immediately. There is deliberately no queue command that stops or
+reconfigures it.
 
 ### Worked example
 
@@ -276,33 +302,39 @@ cat "$q/results/$id.json"
 
 Events are `started`, `request`, `result`, `ignored`, `recovered`, and
 `stopped`. `ignored` has `detail` `<reason>: <file name>` with reason
-`invalid_id`, `duplicate_id`, or `cannot_claim`.
+`invalid_id` or `cannot_claim`; a rejected duplicate id logs `ignored` with the
+id and status `error`. At most 1000 distinct ignored names are logged. A result
+with code `interrupted` has `phrase` null.
 
 ## Output schema
 
 Every `ask` result, and every file in `results/`, is one line with these keys,
 always present. Absent values are `null`, never missing.
 
-| Key            | Type           | Meaning                                                     |
-| -------------- | -------------- | ----------------------------------------------------------- |
-| `schema`       | integer        | Schema version, currently 1.                                |
-| `command`      | string         | `"ask"`.                                                    |
-| `id`           | string or null | Queue id; null for the command line.                        |
-| `status`       | string         | `answered`, `no_answer`, `refused`, or `error`.             |
-| `phrase`       | string or null | The phrase as received (before trimming); null if none.     |
-| `answer_text`  | string         | The text of every part, joined with newlines; `""` if none. |
-| `answer_parts` | array          | Ordered `{"kind":"text"                                     | "button","text":…}` objects. |
-| `settled`      | boolean        | The answer stayed unchanged for `--settle` seconds.         |
-| `error`        | object or null | `{"code":…,"message":…}` for `refused` and `error`.         |
-| `started_at`   | string         | UTC, ISO 8601, millisecond precision.                       |
-| `finished_at`  | string         | UTC, ISO 8601, millisecond precision.                       |
-| `elapsed_ms`   | integer        | Milliseconds from start to finish.                          |
+| Key            | Type           | Meaning                                                              |
+| -------------- | -------------- | -------------------------------------------------------------------- |
+| `schema`       | integer        | Schema version, currently 1.                                         |
+| `command`      | string         | `"ask"`.                                                             |
+| `id`           | string or null | Queue id; null for the command line.                                 |
+| `status`       | string         | `answered`, `no_answer`, `refused`, or `error`.                      |
+| `phrase`       | string or null | The phrase as received (before trimming); null if none.              |
+| `answer_text`  | string         | The text of every part, joined with newlines; `""` if none.          |
+| `answer_parts` | array          | Ordered objects `{"kind":…,"text":…}`; `kind` is `text` or `button`. |
+| `settled`      | boolean        | The answer stayed unchanged for `--settle` seconds.                  |
+| `error`        | object or null | `{"code":…,"message":…}` for `refused` and `error`.                  |
+| `started_at`   | string         | UTC, ISO 8601, millisecond precision.                                |
+| `finished_at`  | string         | UTC, ISO 8601, millisecond precision.                                |
+| `elapsed_ms`   | integer        | Milliseconds from start to finish.                                   |
 
 Statuses:
 
 - `answered`: Siri’s response had at least one part. If `settled` is false the
   timeout arrived while the answer was still changing, so it may be an interim
-  line such as “Searching for red”. Check `settled` before trusting it.
+  line such as “Searching for red”. Check `settled` before trusting it. A lone
+  text part that starts with “Searching for ” is never treated as settled, so it
+  ends the wait only at the timeout; other interim text that stays unchanged for
+  `--settle` seconds is still reported as settled, so re-ask with a larger
+  `--settle` on a cold start.
 - `no_answer`: nothing appeared in Siri’s response before the timeout.
 - `refused`: the guard refused the phrase; Siri was not touched.
 - `error`: something other than the guard failed.
@@ -318,7 +350,7 @@ Error codes. Refusals: `no_patterns`, `empty_phrase`, `too_long`,
 `siri_not_installed`, `siri_no_window` (Siri AI would not open a window),
 `ui_changed` (an expected element is missing, usually after a macOS update),
 `ax_failure` (an Accessibility call failed), `queue_failure` (the queue
-directory is unusable).
+directory is unusable), `guard_timeout` (an allow pattern backtracked too much).
 
 ### Examples
 
@@ -450,8 +482,11 @@ Conversation” button (`newChatButton`), sets the value of the prompt field
 (`promptViewTextField`), and performs `AXConfirm` on it. No keyboard focus or
 frontmost window is needed. It then polls the `modelResponse` groups of the
 window every 0.4 seconds until the last one has stayed unchanged for `--settle`
-seconds. If Siri AI has no window, it runs `open -a "Siri AI.app"` and waits up
-to ten seconds for one.
+seconds. If Siri AI has no window, it runs
+`/usr/bin/open -a "/System/Applications/Siri AI.app"` and waits up to ten
+seconds for a window, preferring one with subrole `AXStandardWindow`. If the
+window tree has more than 5000 elements it fails with `ui_changed` rather than
+reading a truncated tree.
 
 ## Limitations
 

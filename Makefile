@@ -23,7 +23,7 @@ setup:
 	lefthook install
 
 ci-setup:
-	brew install lefthook shellcheck shfmt zizmor ripgrep
+	brew install lefthook shellcheck shfmt zizmor ripgrep jq
 	$(MAKE) setup
 
 build:

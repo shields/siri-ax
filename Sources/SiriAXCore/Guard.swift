@@ -91,9 +91,24 @@ public struct GuardSettings: Equatable, Sendable {
 }
 
 public enum GuardDecision: Equatable, Sendable {
-  /// The phrase to send: trimmed of leading and trailing spaces.
   case allow(String)
   case refuse(ErrorInfo)
+  case timedOut(ErrorInfo)
+}
+
+final class MatchBox: @unchecked Sendable {
+  private let lock = NSLock()
+  private var value: Bool?
+  func set(_ matched: Bool) {
+    lock.lock()
+    value = matched
+    lock.unlock()
+  }
+  func get() -> Bool? {
+    lock.lock()
+    defer { lock.unlock() }
+    return value
+  }
 }
 
 /// Decides whether a phrase may be sent to Siri. Fails closed: with no patterns, nothing passes.
@@ -101,10 +116,12 @@ public struct PhraseGuard: Sendable {
   private let expressions: [NSRegularExpression]
   public let maxLength: Int
   public let allowNonASCII: Bool
+  public let matchTimeout: Double
 
   public var patternCount: Int { expressions.count }
 
-  public init(_ settings: GuardSettings) throws {
+  public init(_ settings: GuardSettings, matchTimeout: Double = 2) throws {
+    self.matchTimeout = matchTimeout
     guard settings.patterns.count <= maxPatterns else {
       throw GuardConfigError("more than \(maxPatterns) patterns")
     }
@@ -147,11 +164,23 @@ public struct PhraseGuard: Sendable {
     }
     let full = NSRange(location: 0, length: trimmed.utf16.count)
     for expression in expressions {
-      if let match = expression.firstMatch(in: trimmed, options: [], range: full),
-        match.range == full
-      {
-        return .allow(trimmed)
+      let box = MatchBox()
+      let done = DispatchSemaphore(value: 0)
+      let worker = Thread {
+        let match = expression.firstMatch(in: trimmed, options: [], range: full)
+        box.set(match?.range == full)
+        done.signal()
       }
+      worker.start()
+      // ICU cannot be interrupted, so a pattern that backtracks without end leaves its thread
+      // spinning; callers must stop the process after a timeout.
+      if done.wait(timeout: .now() + matchTimeout) == .timedOut {
+        return .timedOut(
+          ErrorInfo(
+            code: .guardTimeout,
+            message: "an allow pattern took too long to match; it backtracks too much"))
+      }
+      if box.get() == true { return .allow(trimmed) }
     }
     return refuse(.notAllowed, "the phrase matches no allow pattern")
   }

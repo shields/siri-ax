@@ -35,6 +35,7 @@ public enum ErrorCode: String, Codable, Sendable, CaseIterable {
   case uiChanged = "ui_changed"
   case axFailure = "ax_failure"
   case queueFailure = "queue_failure"
+  case guardTimeout = "guard_timeout"
 }
 
 public enum Status: String, Codable, Sendable, CaseIterable {
@@ -221,7 +222,6 @@ public struct DoctorReport: Codable, Equatable, Sendable {
     checkedAt = try container.decode(Date.self, forKey: .checkedAt)
   }
 
-  /// 0 when ready, 1 when not.
   public var exitCode: Int32 { status == .ready ? 0 : 1 }
 }
 
@@ -305,7 +305,6 @@ public enum JSON {
     date.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
   }
 
-  /// One compact line, no trailing newline.
   public static func line(_ value: some Encodable) -> String {
     // These types hold only strings, numbers, and dates, which always encode.
     String(decoding: try! encoder().encode(value), as: UTF8.self)
