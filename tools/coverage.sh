@@ -17,7 +17,9 @@
 # Sources/SiriAXCLI/Live needs a permitted terminal and a running Siri AI, so it
 # is excluded from the check.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+# The compiler records physical paths, and llvm-cov ignores a file filter that
+# reaches the checkout through a symlink, which counts every dependency too.
+cd -P "$(dirname "$0")/.."
 bin=$(swift build --show-bin-path)
 core=$bin/SiriAXCoreTests.xctest/Contents/MacOS/SiriAXCoreTests
 cli=$bin/SiriAXCLITests.xctest/Contents/MacOS/SiriAXCLITests
@@ -25,9 +27,9 @@ profile=$bin/codecov/default.profdata
 files=(Sources/SiriAXCore/*.swift Sources/SiriAXCLI/*.swift)
 xcrun llvm-cov report "$core" -object "$cli" --instr-profile "$profile" "${files[@]}"
 percent=$(xcrun llvm-cov export "$core" -object "$cli" --instr-profile "$profile" \
-	--summary-only "${files[@]}" | jq '.data[0].totals.lines.percent')
+    --summary-only "${files[@]}" | jq '.data[0].totals.lines.percent')
 echo "line coverage: $percent%"
 if ! jq -n --argjson p "$percent" '$p >= 97' | grep -q true; then
-	echo "line coverage is below 97%" >&2
-	exit 1
+    echo "line coverage is below 97%" >&2
+    exit 1
 fi
