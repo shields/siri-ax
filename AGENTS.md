@@ -34,8 +34,6 @@ Use `make build`, `make test`, `make lint`, `make fmt`, `make coverage`, and
 - The AX identifiers in `SiriIdentifiers` are private to Siri AI and can change
   between macOS releases; fake trees in `FakeTrees` mirror what was observed on
   macOS 27.2.1.
-- Departure from the right-answers `ci.md`: actions are pinned by full SHA with
-  a version comment instead of readable tags plus a generated
-  `.github/workflows/actions.lock`, and the `actions-lock*` Make targets are
-  omitted, because the lockfile needs `gh actions-lock`. Switch to the lockfile
-  form when that tooling is available.
+- Workflows name actions by release tag, and `.github/workflows/actions.lock`
+  holds their commits. Run `make actions-lock` after editing a workflow; never
+  edit the lockfile by hand.

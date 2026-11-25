@@ -35,7 +35,7 @@ test:
 coverage: test
 	./tools/coverage.sh
 
-lint:
+lint: actions-lock-verify-local
 	./tools/check-notices.sh
 	swift format lint --strict --recursive Package.swift Sources Tests
 	bun run --bun --no-install prettier --check .
@@ -50,3 +50,21 @@ fmt:
 
 run: build
 	.build/release/siri-ax doctor
+
+.PHONY: actions-lock-install actions-lock actions-lock-verify-local actions-lock-verify
+
+# `gh extension install` leaves an installed extension unchanged, and `--force`
+# upgrades an out-of-date one to the latest release, unpinned. Remove it first.
+actions-lock-install:
+	installed=$$(gh extension list) && \
+		if printf '%s\n' "$$installed" | grep -q '^gh actions-lock[[:space:]]'; then gh extension remove actions-lock; fi
+	gh extension install github/gh-actions-lock --pin v0.5.1
+
+actions-lock:
+	gh actions-lock --no-interactive
+
+actions-lock-verify-local:
+	gh actions-lock --verify-local
+
+actions-lock-verify:
+	gh actions-lock --verify
